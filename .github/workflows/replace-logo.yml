@@ -27,11 +27,11 @@ jobs:
               tag = match.group(0)
               if 'data:image/' not in tag:
                   return tag
-              if not re.search(r'(?:id|alt|class)\\s*=\\s*[\"\'][^\"\']*logo[^\"\']*[\"\']', tag, re.I):
+              if not re.search(r'(?:id|alt|class)\s*=\s*["\'][^"\']*logo[^"\']*["\']', tag, re.I):
                   return tag
-              return re.sub(r'src\\s*=\\s*[\"\']data:image/[^;]+;base64,[^\"\']*[\"\']', 'src="images for website/mg logo.png?v=20260830"', tag, count=1, flags=re.I)
+              return re.sub(r'src\s*=\s*["\']data:image/[^;]+;base64,[^"\']*["\']', 'src="images for website/mg logo.png?v=20260830"', tag, count=1, flags=re.I)
 
-          updated = re.sub(r'<img\\b[^>]*>', replace_logo_src, text, flags=re.I)
+          updated = re.sub(r'<img\b[^>]*>', replace_logo_src, text, flags=re.I)
           path.write_text(updated, encoding='utf-8')
           PY
 
