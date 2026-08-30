@@ -1,0 +1,48 @@
+name: Replace Embedded Logo
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  replace-logo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Replace embedded logo images
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_logo_src(match):
+              tag = match.group(0)
+              if 'data:image/' not in tag:
+                  return tag
+              if not re.search(r'(?:id|alt|class)\\s*=\\s*[\"\'][^\"\']*logo[^\"\']*[\"\']', tag, re.I):
+                  return tag
+              return re.sub(r'src\\s*=\\s*[\"\']data:image/[^;]+;base64,[^\"\']*[\"\']', 'src="images for website/mg logo.png?v=20260830"', tag, count=1, flags=re.I)
+
+          updated = re.sub(r'<img\\b[^>]*>', replace_logo_src, text, flags=re.I)
+          path.write_text(updated, encoding='utf-8')
+          PY
+
+      - name: Commit updated HTML
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "No embedded logo references found to replace."
+          else
+            git commit -m "Use new MG Avenues logo in website"
+            git push
+          fi
