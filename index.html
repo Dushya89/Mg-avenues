@@ -2510,5 +2510,224 @@ function closePrivacyPolicy(){const m=document.getElementById('privacy-policy-mo
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacyPolicy();});
 </script>
 
+
+<!-- MG AVENUES SUPABASE LIVE PLOT DATABASE INTEGRATION -->
+<style>
+  .plot-mortgage{background:#dbeafe!important;color:#1d4ed8!important;border:2px solid #3b82f6!important}
+  .plot-available{background:#dcfce7!important;color:#166534!important;border:2px solid #22c55e!important}
+  .plot-reserved{background:#fef3c7!important;color:#92400e!important;border:2px solid #f59e0b!important}
+  .plot-booked{background:#fee2e2!important;color:#991b1b!important;border:2px solid #ef4444!important}
+  #mg-supabase-status{position:fixed;bottom:18px;left:18px;z-index:9998;display:none;padding:8px 12px;border-radius:999px;font:600 12px/1.2 Arial;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;box-shadow:0 4px 14px rgba(0,0,0,.08)}
+</style>
+<div id="mg-supabase-status">Live database connected</div>
+<script>
+(function(){
+  const SUPABASE_URL = 'https://vnsuazlurrxupkcunjlc.supabase.co';
+  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_rb_9x6AuleruuP7FSGSjrQ_-Jkz6c7s';
+  window.MG_SUPABASE_CONFIG = { url: SUPABASE_URL };
+
+  function loadClient(){
+    return new Promise((resolve,reject)=>{
+      if(window.supabase && window.supabase.createClient) return resolve();
+      const s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
+    });
+  }
+
+  async function getClient(){
+    await loadClient();
+    if(!window.mgSupabaseClient) window.mgSupabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
+    return window.mgSupabaseClient;
+  }
+
+  function statusLabel(s){
+    return s==='mortgage' ? 'CRDA Mortgage' : s==='booked' ? 'Sold' : s==='reserved' ? 'Booked' : 'Available';
+  }
+
+  function statusClass(s){
+    return s==='mortgage' ? 'plot-mortgage' : s==='booked' ? 'plot-booked' : s==='reserved' ? 'plot-reserved' : 'plot-available';
+  }
+
+  function escapeAttr(v){ return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  async function loadPlotsFromSupabase(){
+    const sb=await getClient();
+    const {data:projects,error:pe}=await sb.from('projects').select('id,name,status');
+    if(pe) throw pe;
+    const {data:plots,error}=await sb.from('plots').select('id,project_id,plot_number,sqyds,dimensions,facing,status').order('plot_number',{ascending:true});
+    if(error) throw error;
+    (projects||[]).forEach(p=>{
+      if((p.status||'ongoing')!=='ongoing') return;
+      const rows=(plots||[]).filter(x=>x.project_id===p.id);
+      if(rows.length){
+        plotData[p.name]=rows.map(x=>({id:x.id,num:x.plot_number,status:x.status||'available',sqyds:x.sqyds??'',dimensions:x.dimensions??'',facing:x.facing??''}));
+      }
+    });
+    if(typeof refreshProjectSelectors==='function') refreshProjectSelectors();
+    if(typeof renderPlotGrid==='function') renderPlotGrid();
+    const el=document.getElementById('mg-supabase-status'); if(el) el.style.display='block';
+    return plots||[];
+  }
+
+  async function savePlotToSupabase(project,plot){
+    const sb=await getClient();
+    const {data:proj,error:pe}=await sb.from('projects').select('id').eq('name',project).single();
+    if(pe) throw pe;
+    const payload={project_id:proj.id,plot_number:Number(plot.num),sqyds:plot.sqyds===''||plot.sqyds==null?null:Number(plot.sqyds),dimensions:String(plot.dimensions||''),facing:String(plot.facing||''),status:plot.status};
+    const {data,error}=await sb.from('plots').upsert(payload,{onConflict:'project_id,plot_number'}).select().single();
+    if(error) throw error;
+    plot.id=data.id;
+    return data;
+  }
+
+  async function deletePlotFromSupabase(project,plot){
+    const sb=await getClient();
+    const {data:proj,error:pe}=await sb.from('projects').select('id').eq('name',project).single();
+    if(pe) throw pe;
+    const {error}=await sb.from('plots').delete().eq('project_id',proj.id).eq('plot_number',Number(plot.num));
+    if(error) throw error;
+  }
+
+  window.showPlotDetails=function(project,plotNum){
+    const plot=(plotData[project]||[]).find(p=>String(p.num)===String(plotNum));
+    if(!plot) return;
+    const modal=document.getElementById('plot-detail-modal'); if(!modal) return;
+    document.getElementById('plot-detail-project').textContent=project;
+    document.getElementById('plot-detail-number').textContent=plot.num;
+    const sizeEl=document.getElementById('plot-detail-size');
+    const size=plot.sqyds!==''&&plot.sqyds!=null ? String(plot.sqyds)+' Sq.Yds' : 'Not specified';
+    const dim=plot.dimensions ? String(plot.dimensions) : '';
+    if(sizeEl) sizeEl.innerHTML='<div style="display:flex;flex-direction:column;align-items:stretch;gap:2px"><div style="display:flex;justify-content:space-between;gap:12px"><span>Plot Size :</span><strong style="margin-left:auto">'+escapeAttr(size)+'</strong></div>'+(dim?'<div style="text-align:right;font-weight:700">'+escapeAttr(dim)+'</div>':'')+'</div>';
+    document.getElementById('plot-detail-facing').textContent=plot.facing||'Not specified';
+    document.getElementById('plot-detail-status').textContent=statusLabel(plot.status);
+
+    const adminBox=document.getElementById('plot-detail-admin');
+    if(adminBox){
+      adminBox.classList.toggle('hidden',!isAdminLoggedIn);
+      adminBox.innerHTML=isAdminLoggedIn ? '<div class="mt-5 pt-4 border-t border-slate-200 space-y-3">'+
+        '<label class="block text-xs font-bold uppercase text-slate-600">Admin: Plot Details</label>'+
+        '<input id="mg-admin-sqyds" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Plot Size (Sq.Yds)" value="'+escapeAttr(plot.sqyds)+'">'+
+        '<input id="mg-admin-dimensions" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Dimensions e.g. 33\' × 50\'" value="'+escapeAttr(plot.dimensions)+'">'+
+        '<input id="mg-admin-facing" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Facing" value="'+escapeAttr(plot.facing)+'">'+
+        '<select id="plot-detail-status-select" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">'+
+          '<option value="available">Available</option><option value="reserved">Booked</option><option value="booked">Sold</option><option value="mortgage">CRDA Mortgage</option>'+
+        '</select>'+
+        '<div class="flex gap-2"><button type="button" onclick="adminUpdatePlotStatus()" class="flex-1 bg-emerald-600 text-white font-bold px-4 py-2 rounded-lg">Save</button>'+
+        '<button type="button" onclick="adminRemovePlot()" class="bg-red-600 text-white font-bold px-4 py-2 rounded-lg">Remove</button></div></div>' : '';
+      const sel=document.getElementById('plot-detail-status-select'); if(sel) sel.value=plot.status||'available';
+    }
+
+    let publicAction=document.getElementById('mg-public-plot-action');
+    if(!publicAction){
+      publicAction=document.createElement('div'); publicAction.id='mg-public-plot-action'; modal.querySelector('.p-5')?.appendChild(publicAction);
+    }
+    publicAction.innerHTML='';
+    if(plot.status==='mortgage'){
+      publicAction.innerHTML='<div class="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 font-semibold text-sm">This is CRDA Mortgage Plot. Please contact administration.</div>';
+    }else if(plot.status==='available'){
+      publicAction.innerHTML='<button type="button" class="mt-4 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg transition" onclick="selectPlotForBooking(\''+String(project).replace(/'/g,"\\'")+'\','+Number(plot.num)+')">Book Now</button>';
+    }
+    modal.classList.remove('hidden'); modal.classList.add('flex');
+  };
+
+  window.adminUpdatePlotStatus=async function(){
+    if(!isAdminLoggedIn){alert('Admin login required.');return;}
+    const sb=await getClient();
+    const {data:{user}}=await sb.auth.getUser();
+    if(!user || (user.email||'').toLowerCase()!=='mgavenuesgvm@gmail.com'){
+      alert('Please login through Supabase Auth using the MG Avenues admin account.'); return;
+    }
+    const project=document.getElementById('project-selector')?.value||'Elite Nandanavanam';
+    const plotNum=document.getElementById('plot-detail-number')?.textContent||'';
+    const plot=(plotData[project]||[]).find(p=>String(p.num)===String(plotNum));
+    if(!plot) return;
+    const sel=document.getElementById('plot-detail-status-select');
+    if(!sel) return;
+    plot.status=sel.value;
+    plot.sqyds=document.getElementById('mg-admin-sqyds')?.value.trim()||'';
+    plot.dimensions=document.getElementById('mg-admin-dimensions')?.value||'';
+    plot.facing=document.getElementById('mg-admin-facing')?.value||'';
+    try{
+      await savePlotToSupabase(project,plot);
+      try{savePlotStatuses();}catch(e){}
+      renderPlotGrid();
+      closePlotDetailModal();
+      showToast('Plot '+plot.num+' details saved successfully.');
+    }catch(e){
+      console.error(e); alert('Supabase save failed: '+(e.message||e));
+    }
+  };
+
+  window.adminRemovePlot=async function(){
+    if(!isAdminLoggedIn){alert('Admin login required.');return;}
+    const project=document.getElementById('project-selector')?.value||'Elite Nandanavanam';
+    const plotNum=document.getElementById('plot-detail-number')?.textContent||'';
+    const plot=(plotData[project]||[]).find(p=>String(p.num)===String(plotNum));
+    if(!plot) return;
+    if(!confirm('Remove Plot No. '+plot.num+' from this project?')) return;
+    try{
+      await deletePlotFromSupabase(project,plot);
+      plotData[project]=(plotData[project]||[]).filter(p=>String(p.num)!==String(plotNum));
+      renderPlotGrid(); closePlotDetailModal(); showToast('Plot '+plotNum+' removed.');
+    }catch(e){console.error(e);alert('Supabase remove failed: '+(e.message||e));}
+  };
+
+  window.cyclePlotStatus=async function(project,plotNum){
+    if(!isAdminLoggedIn) return;
+    const plot=(plotData[project]||[]).find(p=>Number(p.num)===Number(plotNum)); if(!plot) return;
+    const order=['available','reserved','booked','mortgage'];
+    plot.status=order[(order.indexOf(plot.status)+1)%order.length];
+    try{await savePlotToSupabase(project,plot);renderPlotGrid();}catch(e){alert('Supabase save failed: '+(e.message||e));}
+  };
+
+  window.handleAdminLogin=async function(event){
+    event.preventDefault();
+    const email=document.getElementById('admin-email-input').value.trim().toLowerCase();
+    const password=document.getElementById('admin-password-input').value;
+    try{
+      const sb=await getClient();
+      const {data,error}=await sb.auth.signInWithPassword({email,password});
+      if(error) throw error;
+      if(!data.user || (data.user.email||'').toLowerCase()!=='mgavenuesgvm@gmail.com'){
+        await sb.auth.signOut(); throw new Error('This account is not authorized as MG Avenues administrator.');
+      }
+      isAdminLoggedIn=true;
+      sessionStorage.setItem('mg_admin_session','active');
+      updateAdminUIState();
+      toggleAdminModal();
+      showToast('Admin access granted. Supabase database is connected.');
+    }catch(e){
+      console.error(e);
+      alert('Admin login failed. Create the MG Avenues admin user in Supabase Authentication first, then use that email/password here.');
+    }finally{
+      const p=document.getElementById('admin-password-input'); if(p) p.value='';
+    }
+  };
+
+  window.handleAdminLogout=async function(){
+    try{if(window.mgSupabaseClient) await window.mgSupabaseClient.auth.signOut();}catch(e){}
+    isAdminLoggedIn=false; sessionStorage.removeItem('mg_admin_session'); updateAdminUIState(); toggleAdminModal(); showToast('Logged out from Admin mode.');
+  };
+
+  async function init(){
+    try{
+      await getClient();
+      await loadPlotsFromSupabase();
+      const sb=window.mgSupabaseClient;
+      sb.channel('mg-avenues-plots-live').on('postgres_changes',{event:'*',schema:'public',table:'plots'},async()=>{try{await loadPlotsFromSupabase();}catch(e){console.error(e);}}).subscribe();
+      const {data:{session}}=await sb.auth.getSession();
+      if(session && (session.user?.email||'').toLowerCase()==='mgavenuesgvm@gmail.com'){
+        isAdminLoggedIn=true; sessionStorage.setItem('mg_admin_session','active'); if(typeof updateAdminUIState==='function') updateAdminUIState();
+      }
+    }catch(e){
+      console.error('MG Avenues Supabase initialization failed:',e);
+      const el=document.getElementById('mg-supabase-status'); if(el){el.style.display='block';el.textContent='Database setup required';el.style.background='#fff7ed';el.style.color='#c2410c';el.style.borderColor='#fed7aa';}
+    }
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
+})();
+</script>
+
 </body>
 </html>
