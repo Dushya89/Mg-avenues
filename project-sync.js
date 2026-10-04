@@ -3,7 +3,11 @@
   async function loadProjectsCloud(){
     const c=await sb(); if(!c)return;
     const r=await c.from('projects').select('id,name,status,details').order('name');
-    if(r.error) throw r.error;
+    if(r.error) {
+      // Older databases may not have the details column yet. Do not replace local data.
+      console.error('Project cloud read failed:', r.error);
+      return;
+    }
     (r.data||[]).forEach(x=>{
       const d=x.details&&typeof x.details==='object'?x.details:{};
       projectStore[x.name]={...(projectStore[x.name]||{}),...d,title:d.title||x.name,status:x.status||d.status||'ongoing'};
