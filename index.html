@@ -1181,13 +1181,19 @@ Example:
             { id: 6, title: "Badminton & Sports Court", category: "site", src: "https://himajaconstructions.com/wp-content/uploads/2023/06/Badminton-Court-1-1.jpg", caption: "Sports Amenities Area" }
         ];
 
+        // Keep a local backup/cache for safety, but shared Media Gallery data is stored in Supabase.
+        // IMPORTANT: this local copy is never cleared automatically.
         try {
             const savedMedia = localStorage.getItem('mg_avenues_media');
             if (savedMedia) mediaItems = JSON.parse(savedMedia);
-        } catch (e) { console.warn('Could not load saved media.', e); }
+        } catch (e) { console.warn('Could not load local media backup.', e); }
 
         function saveMediaItems() {
-            try { localStorage.setItem('mg_avenues_media', JSON.stringify(mediaItems)); } catch (e) { console.warn('Media persistence failed.', e); }
+            try {
+                localStorage.setItem('mg_avenues_media', JSON.stringify(mediaItems));
+            } catch (e) {
+                console.warn('Local media backup failed.', e);
+            }
         }
 
         let currentMediaFilter = "all";
@@ -1316,35 +1322,38 @@ Example:
             if (form) form.reset();
         }
 
-        function handleAddMediaSubmit(event) {
+        async function handleAddMediaSubmit(event) {
             event.preventDefault();
+            if (!isAdminLoggedIn) { alert('Admin login required.'); return; }
+
             const title = document.getElementById('media-title-input').value.trim();
             const category = document.getElementById('media-category-input').value;
             const fileInput = document.getElementById('media-file-input');
             const caption = document.getElementById('media-caption-input').value.trim();
+            const file = fileInput?.files?.[0];
 
-            if (!title || !fileInput.files || !fileInput.files[0]) return;
+            if (!title || !file) return;
 
-            const file = fileInput.files[0];
-            const reader = new FileReader();
+            try {
+                const cloud = await window.mgMediaAdminCheck();
+                if (!cloud) return;
 
-            reader.onload = function(e) {
-                const newItem = {
-                    id: Date.now(),
-                    title: title,
-                    category: category,
-                    src: e.target.result,
-                    caption: caption
-                };
+                const src = await window.mgUploadMediaFile(file, title);
+                const { data, error } = await cloud.from('media_gallery').insert({
+                    title, category, src, caption
+                }).select().single();
 
-                mediaItems.unshift(newItem);
+                if (error) throw error;
+
+                mediaItems.unshift(data);
                 saveMediaItems();
                 closeAddMediaModal();
                 renderMediaGallery();
-                showToast("New media image successfully added to gallery!");
-            };
-
-            reader.readAsDataURL(file);
+                showToast('New media image successfully added to gallery on all devices!');
+            } catch (e) {
+                console.error('Media add failed:', e);
+                alert('Media upload failed: ' + (e.message || e));
+            }
         }
 
         function openEditMediaModal(id) {
@@ -1364,48 +1373,82 @@ Example:
             document.getElementById('edit-media-form').reset();
         }
 
-        function handleEditMediaSubmit(event) {
+        async function handleEditMediaSubmit(event) {
             event.preventDefault();
-            const id = parseInt(document.getElementById('edit-media-id-input').value);
+            if (!isAdminLoggedIn) { alert('Admin login required.'); return; }
+
+            const id = Number(document.getElementById('edit-media-id-input').value);
             const title = document.getElementById('edit-media-title-input').value.trim();
             const category = document.getElementById('edit-media-category-input').value;
             const caption = document.getElementById('edit-media-caption-input').value.trim();
-            const fileInput = document.getElementById('edit-media-file-input');
+            const file = document.getElementById('edit-media-file-input')?.files?.[0];
 
             if (!title) return;
 
-            const item = mediaItems.find(m => m.id === id);
+            const item = mediaItems.find(m => Number(m.id) === id);
             if (!item) return;
 
-            item.title = title;
-            item.category = category;
-            item.caption = caption;
+            try {
+                const cloud = await window.mgMediaAdminCheck();
+                if (!cloud) return;
 
-            const finishSave = () => {
+                const oldSrc = item.src;
+                let newSrc = oldSrc;
+
+                if (file) {
+                    newSrc = await window.mgUploadMediaFile(file, title);
+                }
+
+                const { data, error } = await cloud.from('media_gallery')
+                    .update({ title, category, caption, src: newSrc })
+                    .eq('id', id)
+                    .select()
+                    .single();
+
+                if (error) {
+                    if (file) await window.mgRemoveMediaStorageFile(newSrc);
+                    throw error;
+                }
+
+                if (file && oldSrc !== newSrc) {
+                    await window.mgRemoveMediaStorageFile(oldSrc);
+                }
+
+                const idx = mediaItems.findIndex(m => Number(m.id) === id);
+                mediaItems[idx] = data;
                 saveMediaItems();
                 closeEditMediaModal();
                 renderMediaGallery();
-                showToast("Media image and details updated successfully!");
-            };
-
-            if (fileInput && fileInput.files && fileInput.files[0]) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    item.src = e.target.result;
-                    finishSave();
-                };
-                reader.readAsDataURL(fileInput.files[0]);
-            } else {
-                finishSave();
+                showToast('Media image and details updated on all devices!');
+            } catch (e) {
+                console.error('Media edit failed:', e);
+                alert('Media update failed: ' + (e.message || e));
             }
         }
 
-        function deleteMediaItem(id) {
+        async function deleteMediaItem(id) {
             if (!isAdminLoggedIn) return;
-            mediaItems = mediaItems.filter(item => item.id !== id);
-            saveMediaItems();
-            renderMediaGallery();
-            showToast("Media image removed from gallery.");
+            if (!confirm('Remove this media image from the gallery?')) return;
+
+            const item = mediaItems.find(m => Number(m.id) === Number(id));
+            if (!item) return;
+
+            try {
+                const cloud = await window.mgMediaAdminCheck();
+                if (!cloud) return;
+
+                const { error } = await cloud.from('media_gallery').delete().eq('id', Number(id));
+                if (error) throw error;
+
+                await window.mgRemoveMediaStorageFile(item.src);
+                mediaItems = mediaItems.filter(m => Number(m.id) !== Number(id));
+                saveMediaItems();
+                renderMediaGallery();
+                showToast('Media image removed from gallery on all devices.');
+            } catch (e) {
+                console.error('Media delete failed:', e);
+                alert('Media delete failed: ' + (e.message || e));
+            }
         }
 
         function showToast(msg) {
@@ -2694,6 +2737,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
       }
       isAdminLoggedIn=true;
       sessionStorage.setItem('mg_admin_session','active');
+      await window.mgLoadMediaCloud(true);
       updateAdminUIState();
       toggleAdminModal();
       showToast('Admin access granted. Supabase database is connected.');
@@ -2710,6 +2754,144 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
     isAdminLoggedIn=false; sessionStorage.removeItem('mg_admin_session'); updateAdminUIState(); toggleAdminModal(); showToast('Logged out from Admin mode.');
   };
 
+  async function mediaAdminUser(){
+    const sb=await getClient();
+    const {data:{user},error}=await sb.auth.getUser();
+    if(error) throw error;
+    if(!user || (user.email||'').toLowerCase()!=='mgavenuesgvm@gmail.com'){
+      alert('Please login as the MG Avenues admin first.');
+      return null;
+    }
+    return sb;
+  }
+
+  window.mgMediaAdminCheck=mediaAdminUser;
+
+  function mediaStoragePath(src){
+    if(!src || typeof src!=='string') return null;
+    const marker='/storage/v1/object/public/media-gallery/';
+    const i=src.indexOf(marker);
+    if(i<0) return null;
+    return decodeURIComponent(src.slice(i+marker.length).split('?')[0]);
+  }
+
+  window.mgRemoveMediaStorageFile=async function(src){
+    try{
+      const path=mediaStoragePath(src);
+      if(!path) return;
+      const sb=await getClient();
+      const {error}=await sb.storage.from('media-gallery').remove([path]);
+      if(error) console.warn('Old media storage cleanup failed:',error);
+    }catch(e){ console.warn('Media storage cleanup failed:',e); }
+  };
+
+  window.mgUploadMediaFile=async function(file,nameHint){
+    const sb=await mediaAdminUser();
+    if(!sb) throw new Error('Admin authentication required.');
+    const safeName=String(nameHint||file.name||'image')
+      .toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'image';
+    const ext=(file.name||'').includes('.') ? file.name.split('.').pop().toLowerCase() : ((file.type||'image/jpeg').split('/')[1]||'jpg');
+    const rand=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2);
+    const path='media/'+Date.now()+'-'+rand+'-'+safeName+'.'+ext;
+    const {error}=await sb.storage.from('media-gallery').upload(path,file,{
+      cacheControl:'31536000',upsert:false,contentType:file.type||'image/jpeg'
+    });
+    if(error) throw error;
+    const {data}=sb.storage.from('media-gallery').getPublicUrl(path);
+    if(!data?.publicUrl) throw new Error('Could not create public media URL.');
+    return data.publicUrl;
+  };
+
+  async function mediaDataUrlToBlob(src){
+    const response=await fetch(src);
+    if(!response.ok) throw new Error('Could not read existing local media image.');
+    return await response.blob();
+  }
+
+  async function seedMediaGalleryIfEmpty(sb){
+    const {data:existing,error:readError}=await sb.from('media_gallery').select('id').limit(1);
+    if(readError) throw readError;
+    if(existing && existing.length) return false;
+
+    let source=[];
+    try{
+      const saved=localStorage.getItem('mg_avenues_media');
+      if(saved){
+        const parsed=JSON.parse(saved);
+        if(Array.isArray(parsed)&&parsed.length) source=parsed;
+      }
+    }catch(e){ console.warn('Could not read local media backup for migration.',e); }
+
+    if(!source.length) source=Array.isArray(mediaItems)?mediaItems.slice():[];
+
+    if(!source.length) return false;
+
+    const uploadedPaths=[];
+    const rows=[];
+    try{
+      for(let i=0;i<source.length;i++){
+        const item=source[i]||{};
+        let src=String(item.src||'');
+        if(src.startsWith('data:image/')){
+          const blob=await mediaDataUrlToBlob(src);
+          const safeName=String(item.title||'image').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'image';
+          const rand=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2);
+          const path='media/'+Date.now()+'-'+rand+'-'+safeName+'.'+((blob.type||'image/jpeg').split('/')[1]||'jpg');
+          const up=await sb.storage.from('media-gallery').upload(path,blob,{cacheControl:'31536000',upsert:false,contentType:blob.type||'image/jpeg'});
+          if(up.error) throw up.error;
+          uploadedPaths.push(path);
+          src=sb.storage.from('media-gallery').getPublicUrl(path).data.publicUrl;
+        }
+        if(!src) continue;
+        rows.push({
+          title:String(item.title||'Untitled Media'),
+          category:String(item.category||'site'),
+          src,
+          caption:String(item.caption||''),
+          created_at:new Date(Date.now()-(i*1000)).toISOString()
+        });
+      }
+
+      if(!rows.length) return false;
+      const {error}=await sb.from('media_gallery').insert(rows);
+      if(error) throw error;
+      return true;
+    }catch(e){
+      if(uploadedPaths.length){
+        try{ await sb.storage.from('media-gallery').remove(uploadedPaths); }catch(cleanErr){ console.warn(cleanErr); }
+      }
+      throw e;
+    }
+  }
+
+  window.mgLoadMediaCloud=async function(allowSeed){
+    try{
+      const sb=await getClient();
+      let {data,error}=await sb.from('media_gallery').select('id,title,category,src,caption,created_at').order('created_at',{ascending:false});
+      if(error) throw error;
+
+      if((!data||!data.length) && allowSeed){
+        const seeded=await seedMediaGalleryIfEmpty(sb);
+        if(seeded){
+          const reload=await sb.from('media_gallery').select('id,title,category,src,caption,created_at').order('created_at',{ascending:false});
+          if(reload.error) throw reload.error;
+          data=reload.data||[];
+        }
+      }
+
+      if(data && data.length){
+        mediaItems=data.map(x=>({id:x.id,title:x.title,category:x.category,src:x.src,caption:x.caption||''}));
+        saveMediaItems();
+      }
+      renderMediaGallery();
+      return data||[];
+    }catch(e){
+      console.error('Media cloud load failed:',e);
+      renderMediaGallery();
+      return null;
+    }
+  };
+
   async function init(){
     try{
       await getClient();
@@ -2717,9 +2899,16 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
       const sb=window.mgSupabaseClient;
       sb.channel('mg-avenues-plots-live').on('postgres_changes',{event:'*',schema:'public',table:'plots'},async()=>{try{await loadPlotsFromSupabase();}catch(e){console.error(e);}}).subscribe();
       const {data:{session}}=await sb.auth.getSession();
-      if(session && (session.user?.email||'').toLowerCase()==='mgavenuesgvm@gmail.com'){
-        isAdminLoggedIn=true; sessionStorage.setItem('mg_admin_session','active'); if(typeof updateAdminUIState==='function') updateAdminUIState();
+      const isSupabaseAdmin=!!(session && (session.user?.email||'').toLowerCase()==='mgavenuesgvm@gmail.com');
+      if(isSupabaseAdmin){
+        isAdminLoggedIn=true; sessionStorage.setItem('mg_admin_session','active');
       }
+      await window.mgLoadMediaCloud(isSupabaseAdmin);
+      if(isSupabaseAdmin && typeof updateAdminUIState==='function') updateAdminUIState();
+
+      sb.channel('mg-avenues-media-live')
+        .on('postgres_changes',{event:'*',schema:'public',table:'media_gallery'},async()=>{try{await window.mgLoadMediaCloud(false);}catch(e){console.error('Media realtime refresh failed:',e);}})
+        .subscribe((status,err)=>{if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')console.warn('Media realtime channel:',status,err);});
     }catch(e){
       console.error('MG Avenues Supabase initialization failed:',e);
       const el=document.getElementById('mg-supabase-status'); if(el){el.style.display='block';el.textContent='Database setup required';el.style.background='#fff7ed';el.style.color='#c2410c';el.style.borderColor='#fed7aa';}
