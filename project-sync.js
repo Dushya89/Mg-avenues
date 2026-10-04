@@ -1,5 +1,60 @@
 (function(){
   async function sb(){return window.mgSupabaseClient;}
+
+  function installAdminAuthBridge(c){
+    if(!c || window.__mgAdminAuthBridgeInstalled)return;
+    window.__mgAdminAuthBridgeInstalled=true;
+
+    document.addEventListener('submit', async function(e){
+      const form=e.target;
+      if(!form || form.id!=='admin-login-form')return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      const email=(document.getElementById('admin-email-input')?.value||'').trim().toLowerCase();
+      const password=document.getElementById('admin-password-input')?.value||'';
+      if(email!=='mgavenuesgvm@gmail.com'){
+        alert('Invalid admin email or password.');
+        return;
+      }
+
+      try{
+        const r=await c.auth.signInWithPassword({email,password});
+        if(r.error)throw r.error;
+        isAdminLoggedIn=true;
+        sessionStorage.setItem('mg_admin_session','active');
+        if(typeof updateAdminUIState==='function')updateAdminUIState();
+        if(window.mgLoadMediaCloud)await window.mgLoadMediaCloud(true);
+        toggleAdminModal();
+        showToast('Admin access granted. Cloud sync is connected.');
+      }catch(err){
+        console.error('Admin Supabase login failed:',err);
+        alert('Admin login failed: '+(err.message||'Please check the Supabase Auth password.'));
+      }finally{
+        const p=document.getElementById('admin-password-input');if(p)p.value='';
+      }
+    },true);
+
+    const localLogout=window.handleAdminLogout;
+    window.handleAdminLogout=async function(){
+      try{await c.auth.signOut();}catch(err){console.warn('Supabase logout failed:',err);}
+      isAdminLoggedIn=false;
+      sessionStorage.removeItem('mg_admin_session');
+      if(typeof updateAdminUIState==='function')updateAdminUIState();
+      toggleAdminModal();
+      showToast('Logged out from Admin mode.');
+    };
+
+    c.auth.getSession().then(({data})=>{
+      const u=data?.session?.user;
+      if(u && (u.email||'').toLowerCase()==='mgavenuesgvm@gmail.com'){
+        isAdminLoggedIn=true;
+        sessionStorage.setItem('mg_admin_session','active');
+        if(typeof updateAdminUIState==='function')updateAdminUIState();
+      }
+    }).catch(err=>console.warn('Admin session restore failed:',err));
+  }
+
   async function loadProjectsCloud(){
     const c=await sb(); if(!c)return;
     const r=await c.from('projects').select('id,name,status,details').order('name');
@@ -43,6 +98,7 @@
           if(x.error)throw x.error;
         }
       }
+      installAdminAuthBridge(c);
       await loadProjectsCloud();
       showToast('Project saved to live database.');
     }catch(err){console.error(err);alert('Project save failed: '+(err.message||err));}
