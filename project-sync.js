@@ -123,6 +123,7 @@
   async function initProjectCloud(){
     try{
       const c=await sb(); if(!c)return;
+      installAdminAuthBridge(c);
       await loadProjectsCloud();
       c.channel('mg-avenues-projects-live').on('postgres_changes',{event:'*',schema:'public',table:'projects'},async()=>{try{await loadProjectsCloud();}catch(e){console.error(e);}}).subscribe();
     }catch(e){console.error('Project sync failed',e);}
