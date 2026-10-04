@@ -26,6 +26,19 @@
       await oldSave(e);
       const name=document.getElementById('project-name-input').value.trim();
       if(name&&projectStore[name])await saveProjectCloud(name,projectStore[name]);
+      if(typeof plotData!=='undefined' && plotData[name] && projectStore[name].status==='ongoing'){
+        const q=await (await sb()).from('projects').select('id').eq('name',name).single();
+        if(q.error)throw q.error;
+        for(const p of plotData[name]){
+          const x=await (await sb()).from('plots').upsert({
+            project_id:q.data.id,plot_number:Number(p.num),
+            sqyds:p.sqyds===''||p.sqyds==null?null:Number(p.sqyds),
+            dimensions:String(p.dimensions||''),facing:String(p.facing||''),
+            status:p.status||'available'
+          },{onConflict:'project_id,plot_number'});
+          if(x.error)throw x.error;
+        }
+      }
       await loadProjectsCloud();
       showToast('Project saved to live database.');
     }catch(err){console.error(err);alert('Project save failed: '+(err.message||err));}
