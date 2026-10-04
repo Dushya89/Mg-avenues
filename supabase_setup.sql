@@ -12,6 +12,9 @@ create table if not exists public.projects (
   updated_at timestamptz not null default now()
 );
 
+-- Stores the full project details edited from Manage Projects.
+alter table public.projects add column if not exists details jsonb not null default '{}'::jsonb;
+
 create table if not exists public.plots (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references public.projects(id) on delete cascade,
@@ -243,3 +246,11 @@ drop trigger if exists plots_updated_at on public.plots;
 create trigger plots_updated_at
 before update on public.plots
 for each row execute function public.set_updated_at();
+
+
+-- Media Gallery realtime (media_gallery table/policies are managed separately).
+do $$
+begin
+  alter publication supabase_realtime add table public.media_gallery;
+exception when duplicate_object then null;
+end $$;
